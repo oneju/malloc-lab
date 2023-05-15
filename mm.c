@@ -24,15 +24,19 @@
  ********************************************************/
 team_t team = {
     /* Team name */
-    "ateam",
+    "Oneju",
     /* First member's full name */
-    "Harry Bovik",
+    "Noh Wonju",
     /* First member's email address */
-    "bovik@cs.cmu.edu",
+    "wonju.noh.24@gmail.com",
     /* Second member's full name (leave blank if none) */
-    "",
+    "Cho Soobeen",
     /* Second member's email address (leave blank if none) */
-    ""
+    "soobeen0419@gmail.com",
+    /* Third member's full name (leave blank if none) */
+    "",
+    /* Third member's email address (leave blank if none) */
+    ""    
 };
 
 #define WSIZE 4 /* Word and header/footer size */
@@ -223,17 +227,18 @@ void mm_free(void *ptr)
 void *mm_realloc(void *ptr, size_t size)
 {
     void *newptr;
+    void *oldptr = ptr;
     newptr = mm_malloc(size);
     if (newptr == NULL){
         return NULL;
     }
     
-    size_t copySize = GET_SIZE(HDRP(ptr));
+    size_t copySize = GET_SIZE(HDRP(oldptr));
     if (size < copySize){
         copySize = size;
     }
     
-    memcpy(newptr, ptr, copySize);
-    mm_free(ptr);
+    memcpy(newptr, oldptr, copySize);
+    mm_free(oldptr);
     return newptr;
 }
