@@ -30,13 +30,9 @@ team_t team = {
     /* First member's email address */
     "wonju.noh.24@gmail.com",
     /* Second member's full name (leave blank if none) */
-    "Cho Soobeen",
-    /* Second member's email address (leave blank if none) */
-    "soobeen0419@gmail.com",
-    /* Third member's full name (leave blank if none) */
     "",
-    /* Third member's email address (leave blank if none) */
-    ""    
+    /* Second member's email address (leave blank if none) */
+    ""
 };
 
 #define WSIZE 4 /* Word and header/footer size */
@@ -59,6 +55,7 @@ team_t team = {
 #define PREV_BLKP(bp) ((char *)(bp) - GET_SIZE(((char *)(bp)-DSIZE)))
 
 static char *heap_listp;
+static char *last_bp; /* for next fit */
 static void *extend_heap(size_t words);
 static void *coalesce(void *bp);
 static void *find_fit(size_t asize);
@@ -78,6 +75,7 @@ int mm_init(void)
     PUT(heap_listp + (3*WSIZE),PACK(0,1));
     
     heap_listp += (2*WSIZE);
+    last_bp = heap_listp; /* last bp 블록 초기값으로 설정 */
     
     /* Extend the empty heap with a free block of CHNKSIZE bytes*/
     if (extend_heap(CHUNKSIZE/WSIZE)==NULL){
@@ -109,18 +107,18 @@ static void *coalesce(void *bp)
     size_t next_alloc = GET_ALLOC(HDRP(NEXT_BLKP(bp)));
     size_t size = GET_SIZE(HDRP(bp));
 
-     /* case 1 */
+    /* case 1 */
     if (prev_alloc && next_alloc){
         return bp;
     }
-     /* case 2 */
+    /* case 2 */
     else if (prev_alloc && !next_alloc) {
         size += GET_SIZE(HDRP(NEXT_BLKP(bp)));
         
         PUT(HDRP(bp),PACK(size,0));
         PUT(FTRP(bp),PACK(size,0));
     }
-     /* case 3 */
+    /* case 3 */
     else if (!prev_alloc && next_alloc) {
         size += GET_SIZE(HDRP(PREV_BLKP(bp)));
         
@@ -129,7 +127,7 @@ static void *coalesce(void *bp)
         
         bp = PREV_BLKP(bp);
     }
-     /* case 4 */
+    /* case 4 */
     else{
         size += GET_SIZE(FTRP(NEXT_BLKP(bp)))+GET_SIZE(HDRP(PREV_BLKP(bp)));
         
@@ -138,11 +136,30 @@ static void *coalesce(void *bp)
         
         bp = PREV_BLKP(bp);
     }
-    
+    last_bp = bp;
     return bp;
 }
 static void *find_fit(size_t asize)
 {
+    // Next-fit
+    void *bp = last_bp;
+    /* 탐색 : last_bp(마지막으로 방문한 블럭) -> Footer */
+    for (; GET_SIZE(HDRP(last_bp))>0; last_bp = NEXT_BLKP(last_bp))
+    {
+        if (!GET_ALLOC(HDRP(last_bp)) && (asize <= GET_SIZE(HDRP(last_bp)))){
+            return last_bp;
+        }
+    }
+    /* 탐색 : Header -> last_bp */
+    for (last_bp = heap_listp; last_bp<bp; last_bp = NEXT_BLKP(last_bp))
+    {
+        if (!GET_ALLOC(HDRP(last_bp)) && (asize <= GET_SIZE(HDRP(last_bp)))){
+            return last_bp;
+        }
+    }
+    return NULL;
+/*
+    // First-fit
     void *bp;
     for (bp = heap_listp; GET_SIZE(HDRP(bp))>0; bp = NEXT_BLKP(bp))
     {
@@ -151,6 +168,7 @@ static void *find_fit(size_t asize)
         }
     }
     return NULL;
+*/    
 }
 
 static void place(void *bp, size_t asize)
@@ -171,6 +189,7 @@ static void place(void *bp, size_t asize)
         PUT(HDRP(bp),PACK(csize,1));
         PUT(FTRP(bp),PACK(csize,1));
     }
+    last_bp = bp;
 }
 /* 
  * mm_malloc - Allocate a block by incrementing the brk pointer.
@@ -233,7 +252,7 @@ void *mm_realloc(void *ptr, size_t size)
         return NULL;
     }
     
-    size_t copySize = GET_SIZE(HDRP(oldptr));
+    size_t copySize = GET_SIZE(HDRP(ptr));
     if (size < copySize){
         copySize = size;
     }
