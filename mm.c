@@ -60,6 +60,7 @@ static void *extend_heap(size_t words);
 static void *coalesce(void *bp);
 static void *find_fit(size_t asize);
 static void place(void *bp, size_t asize);
+
 /* 
  * mm_init - initialize the malloc package.
  */
@@ -69,11 +70,10 @@ int mm_init(void)
         return -1;
     }
     
-    PUT(heap_listp, 0);
-    PUT(heap_listp + (1*WSIZE),PACK(DSIZE,1));
-    PUT(heap_listp + (2*WSIZE),PACK(DSIZE,1));
-    PUT(heap_listp + (3*WSIZE),PACK(0,1));
-    
+    PUT(heap_listp, 0);                             /* padding */
+    PUT(heap_listp + (1*WSIZE),PACK(DSIZE,1));      /* prolog header */
+    PUT(heap_listp + (2*WSIZE),PACK(DSIZE,1));      /* prolog footer */
+    PUT(heap_listp + (3*WSIZE),PACK(0,1));          /* epilogue header */
     heap_listp += (2*WSIZE);
     last_bp = heap_listp; /* last bp 블록 초기값으로 설정 */
     
@@ -91,7 +91,7 @@ static void *extend_heap(size_t words)
 
     size = (words % 2) ? (words+1) * WSIZE : words * WSIZE;
     
-    if ((long)(bp = mem_sbrk(size))==-1){
+    if ((long)(bp = mem_sbrk(size))==(void*)-1){
         return NULL;
     }
     
@@ -102,23 +102,24 @@ static void *extend_heap(size_t words)
     return coalesce(bp);
 }
 static void *coalesce(void *bp)
-{
+{   
+    //Inplicit list
     size_t prev_alloc = GET_ALLOC(FTRP(PREV_BLKP(bp)));
     size_t next_alloc = GET_ALLOC(HDRP(NEXT_BLKP(bp)));
     size_t size = GET_SIZE(HDRP(bp));
 
-    /* case 1 */
+    // case 1
     if (prev_alloc && next_alloc){
         return bp;
     }
-    /* case 2 */
+    // case 2
     else if (prev_alloc && !next_alloc) {
         size += GET_SIZE(HDRP(NEXT_BLKP(bp)));
         
         PUT(HDRP(bp),PACK(size,0));
         PUT(FTRP(bp),PACK(size,0));
     }
-    /* case 3 */
+    // case 3
     else if (!prev_alloc && next_alloc) {
         size += GET_SIZE(HDRP(PREV_BLKP(bp)));
         
@@ -127,7 +128,7 @@ static void *coalesce(void *bp)
         
         bp = PREV_BLKP(bp);
     }
-    /* case 4 */
+    // case 4 
     else{
         size += GET_SIZE(FTRP(NEXT_BLKP(bp)))+GET_SIZE(HDRP(PREV_BLKP(bp)));
         
@@ -137,51 +138,38 @@ static void *coalesce(void *bp)
         bp = PREV_BLKP(bp);
     }
     last_bp = bp;
-    return bp;
+    return bp; 
 }
 static void *find_fit(size_t asize)
 {
     // Next-fit
     void *bp = last_bp;
-    /* 탐색 : last_bp(마지막으로 방문한 블럭) -> Footer */
+    // 탐색 : last_bp(마지막으로 방문한 블럭) -> Footer 
     for (; GET_SIZE(HDRP(last_bp))>0; last_bp = NEXT_BLKP(last_bp))
     {
         if (!GET_ALLOC(HDRP(last_bp)) && (asize <= GET_SIZE(HDRP(last_bp)))){
             return last_bp;
         }
     }
-    /* 탐색 : Header -> last_bp */
+    // 탐색 : Header -> last_bp   
     for (last_bp = heap_listp; last_bp<bp; last_bp = NEXT_BLKP(last_bp))
     {
         if (!GET_ALLOC(HDRP(last_bp)) && (asize <= GET_SIZE(HDRP(last_bp)))){
             return last_bp;
         }
     }
-    return NULL;
-/*
-    // First-fit
-    void *bp;
-    for (bp = heap_listp; GET_SIZE(HDRP(bp))>0; bp = NEXT_BLKP(bp))
-    {
-        if (!GET_ALLOC(HDRP(bp)) && (asize <= GET_SIZE(HDRP(bp)))){
-            return bp;
-        }
-    }
-    return NULL;
-*/    
+    return NULL;   
 }
 
 static void place(void *bp, size_t asize)
 {
     size_t csize = GET_SIZE(HDRP(bp));
-
     if((csize - asize) >= (2*DSIZE))
     {
         PUT(HDRP(bp),PACK(asize,1));
         PUT(FTRP(bp),PACK(asize,1));
     
         bp = NEXT_BLKP(bp);
-    
         PUT(HDRP(bp),PACK(csize-asize,0));
         PUT(FTRP(bp),PACK(csize-asize,0));
     }
@@ -189,8 +177,9 @@ static void place(void *bp, size_t asize)
         PUT(HDRP(bp),PACK(csize,1));
         PUT(FTRP(bp),PACK(csize,1));
     }
-    last_bp = bp;
+    // last_bp = bp;
 }
+
 /* 
  * mm_malloc - Allocate a block by incrementing the brk pointer.
  *     Always allocate a block whose size is a multiple of the alignment.
@@ -247,12 +236,19 @@ void *mm_realloc(void *ptr, size_t size)
 {
     void *newptr;
     void *oldptr = ptr;
+    if (size <= 0){
+        mm_free(ptr);
+        return 0;
+    }
+    if (ptr == NULL){
+        return mm_malloc(size);
+    }
     newptr = mm_malloc(size);
     if (newptr == NULL){
         return NULL;
     }
     
-    size_t copySize = GET_SIZE(HDRP(ptr));
+    size_t copySize = GET_SIZE(HDRP(oldptr));
     if (size < copySize){
         copySize = size;
     }
