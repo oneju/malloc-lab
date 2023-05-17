@@ -54,28 +54,37 @@ team_t team = {
 #define NEXT_BLKP(bp) ((char *)(bp) + GET_SIZE(((char *)(bp)-WSIZE)))
 #define PREV_BLKP(bp) ((char *)(bp) - GET_SIZE(((char *)(bp)-DSIZE)))
 
+#define PRED_FREEP(bp) (*(void **)(bp))           /* Predeccessor for explicit */
+#define SUCC_FREEP(bp) (*(void **)(bp + WSIZE))   /* Successor for explicit */
+
 static char *heap_listp;
-static char *last_bp; /* for next fit */
 static void *extend_heap(size_t words);
 static void *coalesce(void *bp);
 static void *find_fit(size_t asize);
 static void place(void *bp, size_t asize);
+
+static char *free_listp;
+static void put_free_block(void *bp);      /* 가용리스트 앞에 가용블럭을 추가 */
+static void remove_free_block(void *bp);   /* 가용블럭 하나 삭제 */
+
+
 /* 
  * mm_init - initialize the malloc package.
  */
 int mm_init(void)
 {
-    if ((heap_listp = mem_sbrk(4*WSIZE)) == (void *)-1){
+    if ((heap_listp = mem_sbrk(6*WSIZE)) == (void *)-1){
         return -1;
     }
     
-    PUT(heap_listp, 0);
-    PUT(heap_listp + (1*WSIZE),PACK(DSIZE,1));
-    PUT(heap_listp + (2*WSIZE),PACK(DSIZE,1));
-    PUT(heap_listp + (3*WSIZE),PACK(0,1));
+    PUT(heap_listp, 0);                             /* padding */
+    PUT(heap_listp + (1*WSIZE),PACK(DSIZE*2,1));    /* prolog : succ, pred가 추가됐기때문에 길이 추가 */
+    PUT(heap_listp + (2*WSIZE),NULL);               /* successor */
+    PUT(heap_listp + (3*WSIZE),NULL);               /* predeccessor */
+    PUT(heap_listp + (4*WSIZE),PACK(DSIZE*2,1));    /* prolog footer */
+    PUT(heap_listp + (5*WSIZE),PACK(0,1));          /* epilogue header */
     
-    heap_listp += (2*WSIZE);
-    last_bp = heap_listp; /* last bp 블록 초기값으로 설정 */
+    free_listp = heap_listp + DSIZE;                /* prolog를 가리킨다 */
     
     /* Extend the empty heap with a free block of CHNKSIZE bytes*/
     if (extend_heap(CHUNKSIZE/WSIZE)==NULL){
@@ -91,7 +100,7 @@ static void *extend_heap(size_t words)
 
     size = (words % 2) ? (words+1) * WSIZE : words * WSIZE;
     
-    if ((long)(bp = mem_sbrk(size))==-1){
+    if ((long)(bp = mem_sbrk(size))==(void*)-1){
         return NULL;
     }
     
@@ -102,95 +111,99 @@ static void *extend_heap(size_t words)
     return coalesce(bp);
 }
 static void *coalesce(void *bp)
-{
-    size_t prev_alloc = GET_ALLOC(FTRP(PREV_BLKP(bp)));
-    size_t next_alloc = GET_ALLOC(HDRP(NEXT_BLKP(bp)));
-    size_t size = GET_SIZE(HDRP(bp));
-
-    /* case 1 */
-    if (prev_alloc && next_alloc){
-        return bp;
+{   /* 현재 bp 는 가용리스트에 없기 떄문에 무조건 한번은 put을 해줘야한다 */
+    size_t prev_alloc = GET_ALLOC(FTRP(PREV_BLKP(bp))); 
+    size_t next_alloc = GET_ALLOC(HDRP(NEXT_BLKP(bp))); 
+    size_t size = GET_SIZE(HDRP(bp));                   
+    /* Case 1 앞, 뒤 모두 할당되어 있을 때 */
+    /* Case 2 앞은 할당되어 있고, 뒤는 가용블록일 때 */
+    if (prev_alloc && !next_alloc)
+    {
+        remove_free_block(NEXT_BLKP(bp));
+        size += GET_SIZE(HDRP(NEXT_BLKP(bp))); 
+        PUT(HDRP(bp), PACK(size, 0));
+        PUT(FTRP(bp), PACK(size, 0));
     }
-    /* case 2 */
-    else if (prev_alloc && !next_alloc) {
-        size += GET_SIZE(HDRP(NEXT_BLKP(bp)));
-        
-        PUT(HDRP(bp),PACK(size,0));
-        PUT(FTRP(bp),PACK(size,0));
+    /* Case 3 앞은 가용블록이고, 뒤는 할당되어 있을 때 */
+    else if (!prev_alloc && next_alloc)
+    {
+        remove_free_block(PREV_BLKP(bp));
+        size += GET_SIZE(HDRP(PREV_BLKP(bp))); 
+        bp = PREV_BLKP(bp);
+        PUT(HDRP(bp), PACK(size, 0));
+        PUT(FTRP(bp), PACK(size, 0));
     }
-    /* case 3 */
-    else if (!prev_alloc && next_alloc) {
-        size += GET_SIZE(HDRP(PREV_BLKP(bp)));
-        
-        PUT(FTRP(bp),PACK(size,0));
-        PUT(HDRP(PREV_BLKP(bp)),PACK(size,0));
-        
+    /* Case 4 앞, 뒤 모두 가용블록일 때 */
+    else if (!prev_alloc && !next_alloc)
+    {
+        remove_free_block(NEXT_BLKP(bp));
+        remove_free_block(PREV_BLKP(bp));
+        size += GET_SIZE(HDRP(PREV_BLKP(bp))) + GET_SIZE(FTRP(NEXT_BLKP(bp))); 
+        PUT(HDRP(PREV_BLKP(bp)), PACK(size, 0));
+        PUT(FTRP(NEXT_BLKP(bp)), PACK(size, 0));
         bp = PREV_BLKP(bp);
     }
-    /* case 4 */
-    else{
-        size += GET_SIZE(FTRP(NEXT_BLKP(bp)))+GET_SIZE(HDRP(PREV_BLKP(bp)));
-        
-        PUT(HDRP(PREV_BLKP(bp)),PACK(size,0));
-        PUT(FTRP(NEXT_BLKP(bp)),PACK(size,0));
-        
-        bp = PREV_BLKP(bp);
-    }
-    last_bp = bp;
+    put_free_block(bp);
     return bp;
 }
 static void *find_fit(size_t asize)
 {
-    // Next-fit
-    void *bp = last_bp;
-    /* 탐색 : last_bp(마지막으로 방문한 블럭) -> Footer */
-    for (; GET_SIZE(HDRP(last_bp))>0; last_bp = NEXT_BLKP(last_bp))
-    {
-        if (!GET_ALLOC(HDRP(last_bp)) && (asize <= GET_SIZE(HDRP(last_bp)))){
-            return last_bp;
-        }
-    }
-    /* 탐색 : Header -> last_bp */
-    for (last_bp = heap_listp; last_bp<bp; last_bp = NEXT_BLKP(last_bp))
-    {
-        if (!GET_ALLOC(HDRP(last_bp)) && (asize <= GET_SIZE(HDRP(last_bp)))){
-            return last_bp;
-        }
-    }
-    return NULL;
-/*
     // First-fit
     void *bp;
-    for (bp = heap_listp; GET_SIZE(HDRP(bp))>0; bp = NEXT_BLKP(bp))
+    for (bp = free_listp; GET_ALLOC(HDRP(bp))!=1; bp = SUCC_FREEP(bp))
     {
-        if (!GET_ALLOC(HDRP(bp)) && (asize <= GET_SIZE(HDRP(bp)))){
+        /* bp가 할당이 되지 않았을 때 loop */
+        if (asize <= GET_SIZE(HDRP(bp))){
             return bp;
         }
     }
     return NULL;
-*/    
 }
 
 static void place(void *bp, size_t asize)
 {
     size_t csize = GET_SIZE(HDRP(bp));
-
+    /* for Explicit list */
+    remove_free_block(bp); // free -> alloc
     if((csize - asize) >= (2*DSIZE))
     {
         PUT(HDRP(bp),PACK(asize,1));
         PUT(FTRP(bp),PACK(asize,1));
     
         bp = NEXT_BLKP(bp);
-    
         PUT(HDRP(bp),PACK(csize-asize,0));
         PUT(FTRP(bp),PACK(csize-asize,0));
+        /* for Explicit list */
+        put_free_block(bp); // 
     }
     else{
         PUT(HDRP(bp),PACK(csize,1));
         PUT(FTRP(bp),PACK(csize,1));
     }
-    last_bp = bp;
 }
+
+static void put_free_block(void *bp)
+{
+    PRED_FREEP(bp) = NULL;          /* 현재 bp의 prev는 값이 없고 */
+    SUCC_FREEP(bp) = free_listp;    /* 현재 bp의 next를 이전 값으로 저장한다 */          
+    PRED_FREEP(free_listp) = bp;    /* 이전 bp의 prev를 현재 bp와 연결 */
+    free_listp = bp;                /* 마지막 point bp로 업데이트 */
+}
+static void remove_free_block(void *bp)
+{
+    /* bp의 predeccessor과 successor를 연결시킨다 */
+    if (bp == free_listp) 
+    {
+        PRED_FREEP(SUCC_FREEP(bp)) = NULL;  
+        free_listp = SUCC_FREEP(bp);        
+    }
+    else
+    {
+        SUCC_FREEP(PRED_FREEP(bp)) = SUCC_FREEP(bp);
+        PRED_FREEP(SUCC_FREEP(bp)) = PRED_FREEP(bp);
+    }
+}
+
 /* 
  * mm_malloc - Allocate a block by incrementing the brk pointer.
  *     Always allocate a block whose size is a multiple of the alignment.
@@ -247,12 +260,19 @@ void *mm_realloc(void *ptr, size_t size)
 {
     void *newptr;
     void *oldptr = ptr;
+    if (size <= 0){
+        mm_free(ptr);
+        return 0;
+    }
+    if (ptr == NULL){
+        return mm_malloc(size);
+    }
     newptr = mm_malloc(size);
     if (newptr == NULL){
         return NULL;
     }
     
-    size_t copySize = GET_SIZE(HDRP(ptr));
+    size_t copySize = GET_SIZE(HDRP(oldptr));
     if (size < copySize){
         copySize = size;
     }
